@@ -1,0 +1,51 @@
+name: Build and Release AppImage
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-appimage:
+    name: Build & Release Linux AppImage
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (LTS Glibc compatibility)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 file wget curl
+          python -m pip install --upgrade pip pyinstaller
+
+      - name: Build ApexFetch AppImage
+        run: |
+          chmod +x build_appimage.sh
+          ./build_appimage.sh
+
+      - name: Generate SHA256 Checksum
+        run: |
+          cd dist
+          sha256sum ApexFetch-x86_64.AppImage > ApexFetch-x86_64.AppImage.sha256
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/ApexFetch-x86_64.AppImage
+            dist/ApexFetch-x86_64.AppImage.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true
