@@ -1,4 +1,4 @@
-name: Build and Release AppImage
+name: Build and Release Multi-Platform (Linux & macOS)
 
 on:
   push:
@@ -10,42 +10,105 @@ permissions:
   contents: write
 
 jobs:
-  build-appimage:
-    name: Build & Release Linux AppImage
+  build-linux:
+    name: Build Linux AppImage
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11 (LTS Glibc compatibility)
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Build Dependencies
+      - name: Install Linux Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libfuse2 file wget curl
           python -m pip install --upgrade pip pyinstaller
 
-      - name: Build ApexFetch AppImage
+      - name: Build AppImage
         run: |
           chmod +x build_appimage.sh
           ./build_appimage.sh
 
-      - name: Generate SHA256 Checksum
+      - name: Generate Checksums
         run: |
           cd dist
           sha256sum ApexFetch-x86_64.AppImage > ApexFetch-x86_64.AppImage.sha256
 
-      - name: Publish Release Assets
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: linux-artifacts
+          path: |
             dist/ApexFetch-x86_64.AppImage
             dist/ApexFetch-x86_64.AppImage.sha256
+
+  build-macos:
+    name: Build macOS Binary & App Bundle
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install macOS Dependencies
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+
+      - name: Build macOS Artifacts
+        run: |
+          chmod +x build_macos.sh
+          ./build_macos.sh
+
+      - name: Generate Checksums
+        run: |
+          cd dist
+          for file in ApexFetch-macOS-*.tar.gz ApexFetch-macOS.app.zip; do
+            if [ -f "$file" ]; then
+              shasum -a 256 "$file" > "${file}.sha256"
+            fi
+          done
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            dist/ApexFetch-macOS-*.tar.gz
+            dist/ApexFetch-macOS-*.tar.gz.sha256
+            dist/ApexFetch-macOS.app.zip
+            dist/ApexFetch-macOS.app.zip.sha256
+
+  publish-release:
+    name: Publish Release Assets
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List Release Files
+        run: |
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
           draft: false
           prerelease: false
           generate_release_notes: true

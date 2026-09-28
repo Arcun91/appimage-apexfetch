@@ -112,8 +112,300 @@ class SystemCollector:
     """
     Direct sysfs / procfs / stdlib system collector.
     Avoids slow external forks whenever possible for sub-millisecond data retrieval.
+    Supports both Linux and macOS (Darwin).
     """
 
+    IS_DARWIN = sys.platform == "darwin"
+
+    @staticmethod
+    def _run_cmd(cmd: List[str], timeout: float = 0.3) -> str:
+        """Safe fast subprocess execution."""
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if p.returncode == 0:
+                return p.stdout.strip()
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _sysctl(key: str) -> str:
+        """Read macOS sysctl variable."""
+        return SystemCollector._run_cmd(["sysctl", "-n", key])
+
+    # --------------------------------------------------------------------------
+    # macOS Specific Collectors
+    # --------------------------------------------------------------------------
+    @staticmethod
+    def _get_macos_os_info() -> Dict[str, Any]:
+        """Detect exact macOS release, marketing name, version, and build."""
+        ver_str = platform.mac_ver()[0] or SystemCollector._run_cmd(["sw_vers", "-productVersion"]) or "14.0"
+        build_str = SystemCollector._run_cmd(["sw_vers", "-buildVersion"])
+        arch = platform.machine()
+        kernel_release = platform.release()
+
+        major = 0
+        minor = 0
+        try:
+            parts = ver_str.split(".")
+            major = int(parts[0])
+            if len(parts) > 1:
+                minor = int(parts[1])
+        except Exception:
+            pass
+
+        names = {
+            16: "macOS",
+            15: "macOS Sequoia",
+            14: "macOS Sonoma",
+            13: "macOS Ventura",
+            12: "macOS Monterey",
+            11: "macOS Big Sur",
+            10: {
+                16: "macOS Big Sur",
+                15: "macOS Catalina",
+                14: "macOS Mojave",
+                13: "macOS High Sierra",
+                12: "macOS Sierra",
+                11: "OS X El Capitan",
+                10: "OS X Yosemite"
+            }
+        }
+        if major == 10:
+            comm_name = names[10].get(minor, "macOS (OS X)")
+        else:
+            comm_name = names.get(major, f"macOS {ver_str}")
+
+        build_suffix = f" ({build_str})" if build_str else ""
+        distro_name = f"{comm_name} {ver_str}{build_suffix}"
+
+        return {
+            "name": distro_name,
+            "id": "macos",
+            "version": ver_str,
+            "build": build_str,
+            "kernel": f"Darwin {kernel_release}",
+            "arch": arch,
+            "full_distro": f"{distro_name} {arch}".strip()
+        }
+
+    @staticmethod
+    def _get_macos_host_info() -> Dict[str, Any]:
+        """Read Mac model identifier and friendly model name."""
+        model_id = SystemCollector._sysctl("hw.model") or "Mac"
+        model_names = {
+            "MacBookPro18,1": 'MacBook Pro 16" (M1 Pro, 2021)',
+            "MacBookPro18,2": 'MacBook Pro 16" (M1 Max, 2021)',
+            "MacBookPro18,3": 'MacBook Pro 14" (M1 Pro, 2021)',
+            "MacBookPro18,4": 'MacBook Pro 14" (M1 Max, 2021)',
+            "MacBookPro17,1": 'MacBook Pro 13" (M1, 2020)',
+            "MacBookAir10,1": 'MacBook Air 13" (M1, 2020)',
+            "Macmini9,1": "Mac mini (M1, 2020)",
+            "iMac21,1": 'iMac 24" (M1, 2-port, 2021)',
+            "iMac21,2": 'iMac 24" (M1, 4-port, 2021)',
+            "Mac14,2": 'MacBook Air 13" (M2, 2022)',
+            "Mac14,7": 'MacBook Pro 13" (M2, 2022)',
+            "Mac14,3": "Mac mini (M2, 2023)",
+            "Mac14,12": "Mac mini (M2 Pro, 2023)",
+            "Mac14,15": 'MacBook Air 15" (M2, 2023)',
+            "Mac14,5": 'MacBook Pro 14" (M2 Max, 2023)',
+            "Mac14,9": 'MacBook Pro 14" (M2 Pro, 2023)',
+            "Mac14,6": 'MacBook Pro 16" (M2 Max, 2023)',
+            "Mac14,10": 'MacBook Pro 16" (M2 Pro, 2023)',
+            "Mac14,13": "Mac Studio (M2 Max, 2023)",
+            "Mac14,14": "Mac Studio (M2 Ultra, 2023)",
+            "Mac14,8": "Mac Pro (M2 Ultra, 2023)",
+            "Mac15,3": 'MacBook Pro 14" (M3, 2023)',
+            "Mac15,6": 'MacBook Pro 14" (M3 Pro, 2023)',
+            "Mac15,8": 'MacBook Pro 14" (M3 Max, 2023)',
+            "Mac15,7": 'MacBook Pro 16" (M3 Pro, 2023)',
+            "Mac15,9": 'MacBook Pro 16" (M3 Max, 2023)',
+            "Mac15,12": 'MacBook Air 13" (M3, 2024)',
+            "Mac15,13": 'MacBook Air 15" (M3, 2024)',
+            "Mac16,1": 'MacBook Pro 14" (M4, 2024)',
+            "Mac16,2": 'MacBook Pro 14" (M4 Pro, 2024)',
+            "Mac16,3": 'MacBook Pro 16" (M4 Pro, 2024)',
+            "Mac16,5": 'MacBook Pro 16" (M4 Max, 2024)',
+            "VirtualMac2,1": "Apple Virtual Machine"
+        }
+        friendly = model_names.get(model_id)
+        host_model = f"{friendly} [{model_id}]" if friendly else f"Apple {model_id}".strip()
+
+        # Uptime via kern.boottime
+        boottime_str = SystemCollector._sysctl("kern.boottime")
+        uptime_seconds = 0.0
+        m = re.search(r"sec\s*=\s*(\d+)", boottime_str)
+        if m:
+            try:
+                boot_epoch = float(m.group(1))
+                uptime_seconds = max(0.0, time.time() - boot_epoch)
+            except Exception:
+                pass
+
+        days = int(uptime_seconds // 86400)
+        hours = int((uptime_seconds % 86400) // 3600)
+        minutes = int((uptime_seconds % 3600) // 60)
+        up_parts = []
+        if days > 0: up_parts.append(f"{days} day{'s' if days != 1 else ''}")
+        if hours > 0: up_parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        up_parts.append(f"{minutes} min{'s' if minutes != 1 else ''}")
+
+        return {
+            "vendor": "Apple Inc.",
+            "product": model_id,
+            "version": "",
+            "board": model_id,
+            "model": host_model,
+            "uptime_seconds": uptime_seconds,
+            "uptime_formatted": ", ".join(up_parts) if up_parts else "0 minutes"
+        }
+
+    @staticmethod
+    def _get_macos_session_info() -> Dict[str, Any]:
+        """Detect macOS window manager and terminal session."""
+        term = os.environ.get("TERM_PROGRAM") or os.environ.get("TERMINAL_EMULATOR") or "Terminal"
+        if term == "Apple_Terminal":
+            term = "Terminal.app"
+
+        return {
+            "de": "Aqua (macOS)",
+            "wm": "WindowServer",
+            "display_server": "Quartz Compositor (Metal)",
+            "session_type": "aqua",
+            "user": os.environ.get("USER", "user"),
+            "hostname": platform.node().replace(".local", "")
+        }
+
+    @staticmethod
+    def _get_macos_cpu_info() -> Dict[str, Any]:
+        """Extract Apple Silicon or Intel Mac CPU specifications."""
+        brand = SystemCollector._sysctl("machdep.cpu.brand_string") or platform.processor() or "Apple Silicon"
+        brand = re.sub(r"\((R|TM|tm|r)\)", "", brand)
+        brand = re.sub(r"\s+", " ", brand).strip()
+
+        logical = int(SystemCollector._sysctl("hw.logicalcpu") or os.cpu_count() or 1)
+        physical = int(SystemCollector._sysctl("hw.physicalcpu") or logical)
+
+        # Performance vs Efficiency cores on Apple Silicon
+        p_cores = SystemCollector._sysctl("hw.perflevel0.physicalcpu")
+        e_cores = SystemCollector._sysctl("hw.perflevel1.physicalcpu")
+
+        if p_cores and e_cores:
+            core_repr = f"({physical} cores: {p_cores}P + {e_cores}E)"
+        elif physical != logical:
+            core_repr = f"({physical}C/{logical}T)"
+        else:
+            core_repr = f"({logical})"
+
+        formatted = f"{brand} {core_repr}".strip()
+        return {
+            "model": brand,
+            "cores_logical": logical,
+            "cores_physical": physical,
+            "max_freq_ghz": 0.0,
+            "formatted": formatted
+        }
+
+    @staticmethod
+    def _get_macos_gpu_info() -> List[Dict[str, str]]:
+        """Identify Apple Silicon integrated GPU or discrete graphics."""
+        gpus = []
+        sp_out = SystemCollector._run_cmd(["system_profiler", "SPDisplaysDataType"], timeout=0.5)
+        if sp_out:
+            for line in sp_out.splitlines():
+                if "Chipset Model:" in line:
+                    gpu_name = line.split(":", 1)[1].strip()
+                    gpus.append({"vendor": "Apple", "device": gpu_name, "name": gpu_name})
+        if not gpus:
+            cpu_brand = SystemCollector._sysctl("machdep.cpu.brand_string")
+            if "Apple" in cpu_brand:
+                gpus.append({"vendor": "Apple", "device": cpu_brand, "name": f"{cpu_brand} GPU"})
+            else:
+                gpus.append({"name": "Integrated Graphics (Metal)"})
+        return gpus
+
+    @staticmethod
+    def _get_macos_memory_info() -> Dict[str, Any]:
+        """Compute RAM metrics via macOS sysctl and vm_stat."""
+        memsize_str = SystemCollector._sysctl("hw.memsize")
+        total_bytes = int(memsize_str) if memsize_str.isdigit() else 0
+
+        used_bytes = 0
+        vm_out = SystemCollector._run_cmd(["vm_stat"], timeout=0.3)
+        if vm_out:
+            page_size = 4096
+            m_page = re.search(r"page size of (\d+) bytes", vm_out)
+            if m_page:
+                page_size = int(m_page.group(1))
+
+            vm_dict = {}
+            for line in vm_out.splitlines():
+                parts = line.split(":", 1)
+                if len(parts) == 2:
+                    key = parts[0].strip()
+                    val = parts[1].strip().strip(".")
+                    if val.isdigit():
+                        vm_dict[key] = int(val)
+
+            active = vm_dict.get("Pages active", 0)
+            wired = vm_dict.get("Pages wired down", 0)
+            compressed = vm_dict.get("Pages occupied by compressor", 0)
+            used_bytes = (active + wired + compressed) * page_size
+
+        if used_bytes == 0:
+            used_bytes = total_bytes // 2
+
+        free_bytes = max(0, total_bytes - used_bytes)
+        pct = (used_bytes / total_bytes * 100) if total_bytes > 0 else 0.0
+
+        def to_gib(b: int) -> float:
+            return round(b / (1024 ** 3), 2)
+
+        return {
+            "total_bytes": total_bytes,
+            "used_bytes": used_bytes,
+            "free_bytes": free_bytes,
+            "total_gib": to_gib(total_bytes),
+            "used_gib": to_gib(used_bytes),
+            "free_gib": to_gib(free_bytes),
+            "percent": round(pct, 1)
+        }
+
+    @staticmethod
+    def _get_macos_audio_info() -> Dict[str, Any]:
+        """Detect CoreAudio and external USB DACs on macOS."""
+        server = "CoreAudio"
+        usb_dacs = []
+        active_sink = "Built-in Audio (Speakers)"
+
+        sp_audio = SystemCollector._run_cmd(["system_profiler", "SPAudioDataType"], timeout=0.5)
+        if sp_audio:
+            for line in sp_audio.splitlines():
+                line_s = line.strip()
+                if any(k in line_s.lower() for k in ("dac", "usb audio", "fiio", "topping", "schiit", "dragonfly", "focusrite", "audioquest", "motu")):
+                    cleaned = line_s.strip(":").strip()
+                    if cleaned and cleaned not in usb_dacs:
+                        usb_dacs.append(cleaned)
+
+        return {
+            "server": server,
+            "active_sink": active_sink,
+            "usb_dacs": usb_dacs,
+            "cards": []
+        }
+
+    @staticmethod
+    def _get_macos_thermal_info() -> Dict[str, Any]:
+        """macOS thermal status."""
+        return {
+            "cpu_temp_c": None,
+            "source": "AppleSMC / SoC",
+            "status": "Normal"
+        }
+
+    # --------------------------------------------------------------------------
+    # Linux & Unified Collectors
+    # --------------------------------------------------------------------------
     @staticmethod
     def get_os_release() -> Dict[str, str]:
         """Parse /etc/os-release or /usr/lib/os-release."""
@@ -136,6 +428,9 @@ class SystemCollector:
     @staticmethod
     def get_os_info() -> Dict[str, Any]:
         """Retrieve OS name, kernel version, and architecture."""
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_os_info()
+
         os_release = SystemCollector.get_os_release()
         distro_name = os_release.get("PRETTY_NAME") or os_release.get("NAME") or "Linux"
         distro_id = os_release.get("ID", "linux").lower()
@@ -155,6 +450,8 @@ class SystemCollector:
     @staticmethod
     def get_host_info() -> Dict[str, Any]:
         """Read motherboard and model info from DMI tables, with ARM/Pi fallback."""
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_host_info()
         def read_dmi(name: str) -> str:
             path = f"/sys/class/dmi/id/{name}"
             if os.path.exists(path):
@@ -234,6 +531,8 @@ class SystemCollector:
     @staticmethod
     def get_session_info() -> Dict[str, Any]:
         """Detect Desktop Environment, Window Manager, and Display Server."""
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_session_info()
         de_name = os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or ""
         display_type = os.environ.get("XDG_SESSION_TYPE", "")
 
@@ -312,6 +611,8 @@ class SystemCollector:
     @staticmethod
     def get_cpu_info() -> Dict[str, Any]:
         """Extract CPU model name, core counts, and frequency."""
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_cpu_info()
         model = "Unknown Processor"
         cores_logical = os.cpu_count() or 1
         cores_physical = None
@@ -375,6 +676,8 @@ class SystemCollector:
     @staticmethod
     def get_gpu_info() -> List[Dict[str, str]]:
         """Identify GPU adapters via lspci with vendor & model cleanup."""
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_gpu_info()
         gpus = []
         try:
             p = subprocess.run(
@@ -437,6 +740,8 @@ class SystemCollector:
     @staticmethod
     def get_memory_info() -> Dict[str, Any]:
         """Compute RAM metrics from /proc/meminfo."""
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_memory_info()
         mem = {}
         if os.path.exists("/proc/meminfo"):
             try:
@@ -474,6 +779,8 @@ class SystemCollector:
         Detect active audio server (PipeWire / PulseAudio / ALSA),
         and identify dedicated sound cards / external USB DACs.
         """
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_audio_info()
         xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         
         # Audio Server Detection
@@ -553,6 +860,8 @@ class SystemCollector:
     @staticmethod
     def get_thermal_info() -> Dict[str, Any]:
         """Read CPU temperature directly from sysfs hwmon or sensors fallback."""
+        if SystemCollector.IS_DARWIN:
+            return SystemCollector._get_macos_thermal_info()
         cpu_temp = None
         source = None
 
@@ -651,6 +960,37 @@ class DistroLogo:
     def get_logo(distro_id: str, c: Colors) -> List[str]:
         d = distro_id.lower()
         r = c.reset
+
+        # macOS / Apple / Darwin
+        if d in ("macos", "darwin", "apple", "osx"):
+            c_grn = c.apex_neon_green
+            c_yel = c.bright_yellow
+            c_ora = c.apex_amber
+            c_red = c.apex_coral
+            c_pur = c.apex_purple
+            c_blu = c.apex_cyan
+            raw = [
+                (c_grn, "                    c.'                 "),
+                (c_grn, "                 ,xNKo.                 "),
+                (c_grn, "               .dXMMMNk;                "),
+                (c_yel, "              .kMMMMMMXl                "),
+                (c_yel, "             ,KMMMMMMWd.                "),
+                (c_yel, "            .kMMMMMMMXc                 "),
+                (c_ora, "           .xMMMMMMMMk.                 "),
+                (c_ora, "         .l0MMMMMMMMN:                  "),
+                (c_red, "      .:d0MMMMMMMMMMXl                  "),
+                (c_red, "    .oKMMMMMMMMMMMMMWk;                 "),
+                (c_pur, "  .o0MMMMMMMMMMMMMMMMMNk;.              "),
+                (c_pur, ".cKMMMMMMMMMMMMMMMMMMMMMWk,             "),
+                (c_blu, ":0MMMMMMMMMMMMMMMMMMMMMMMMMWd.          "),
+                (c_blu, ".xMMMMMMMMMMMMMMMMMMMMMMMMMMMKc         "),
+                (c_blu, " ;0MMMMMMMMMMMMMMMMMMMMMMMMMWd.         "),
+                (c_blu, "  .cKMMMMMMMMMMMMMMMMMMMMMWk,           "),
+                (c_blu, "    .o0MMMMMMMMMMMMMMMMMNk;.            "),
+                (c_pur, "      .oKMMMMMMMMMMMMMWk;               "),
+                (c_pur, "        .:d0MMMMMMMMMMXl                ")
+            ]
+            return [f"{col}{line.rstrip()}{r}" for col, line in raw]
 
         # EndeavourOS
         if "endeavour" in d:

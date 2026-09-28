@@ -61,7 +61,7 @@ Most system fetch tools either depend on heavy runtime packages (e.g. `psutil`, 
 
 ## 🚀 Quick Start
 
-### Option 1: Standalone AppImage (Recommended)
+### 🐧 Linux: Standalone AppImage (Recommended)
 
 Download the latest standalone executable from [Releases](https://github.com/Arcun91/appimage-apexfetch/releases):
 
@@ -77,9 +77,32 @@ chmod +x ApexFetch-x86_64.AppImage
 
 ---
 
-### Option 2: Run Directly with Python
+### 🍏 macOS: Standalone Binary or .app Bundle
 
-Apex-Fetch has **zero third-party dependencies**—it runs on any standard Python 3.8+ installation:
+Apex-Fetch natively supports macOS (Apple Silicon M1/M2/M3/M4 & Intel):
+
+#### 1. CLI Portable Binary
+Download `ApexFetch-macOS-<arch>.tar.gz` from [Releases](https://github.com/Arcun91/appimage-apexfetch/releases):
+
+```bash
+tar -xzf ApexFetch-macOS-*.tar.gz
+chmod +x apexfetch
+./apexfetch
+
+# (Optional) Install system-wide
+sudo mv apexfetch /usr/local/bin/
+```
+
+#### 2. Clickable macOS Application Bundle
+Download `ApexFetch-macOS.app.zip` from [Releases](https://github.com/Arcun91/appimage-apexfetch/releases):
+- Unzip and move `ApexFetch.app` to your `/Applications` folder.
+- Double-click `ApexFetch.app` in Finder or launch it from Spotlight to open an instant terminal card.
+
+---
+
+### 🐍 Run Directly with Python (Any Platform)
+
+Apex-Fetch has **zero third-party dependencies**—it runs on any standard Python 3.8+ installation on Linux or macOS:
 
 ```bash
 git clone https://github.com/Arcun91/appimage-apexfetch.git

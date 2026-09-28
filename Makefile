@@ -32,6 +32,9 @@ test:
 appimage:
 	./build_appimage.sh
 
+macos:
+	./build_macos.sh
+
 install:
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 apexfetch.py $(DESTDIR)$(BINDIR)/apexfetch
