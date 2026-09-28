@@ -1,0 +1,61 @@
+#!/bin/sh
+SELF=$(readlink -f "$0")
+HERE=${SELF%/*}
+export PATH="${HERE}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
+
+# Identify binary
+if [ -x "${HERE}/usr/bin/apexfetch" ]; then
+    BIN="${HERE}/usr/bin/apexfetch"
+else
+    BIN="python3 ${HERE}/usr/bin/apexfetch.py"
+fi
+
+# Case 1: Active terminal session (TTY) or CLI arguments passed (e.g. --json) -> run directly
+if [ -t 1 ] || [ $# -gt 0 ]; then
+    exec $BIN "$@"
+fi
+
+# Case 2: Double-click from graphical file manager (Nautilus, Dolphin, Thunar, etc.)
+if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+    TARGET_CMD="${APPIMAGE:-$BIN}"
+    for TERM_CMD in gnome-terminal ptyxis konsole xfce4-terminal foot alacritty kitty xterm; do
+        if command -v "$TERM_CMD" >/dev/null 2>&1; then
+            case "$TERM_CMD" in
+                gnome-terminal)
+                    exec gnome-terminal --wait --title="ApexFetch" --geometry=115x34 -- "$TARGET_CMD" --hold
+                    ;;
+                ptyxis)
+                    exec ptyxis --wait --title="ApexFetch" -- "$TARGET_CMD" --hold
+                    ;;
+                konsole)
+                    exec konsole --title "ApexFetch" -e "$TARGET_CMD" --hold
+                    ;;
+                xfce4-terminal)
+                    exec xfce4-terminal --title="ApexFetch" --geometry=115x34 -e "$TARGET_CMD --hold"
+                    ;;
+                foot)
+                    exec foot -T "ApexFetch" -w 950x640 "$TARGET_CMD" --hold
+                    ;;
+                alacritty)
+                    exec alacritty -T "ApexFetch" -e "$TARGET_CMD" --hold
+                    ;;
+                kitty)
+                    exec kitty -T "ApexFetch" "$TARGET_CMD" --hold
+                    ;;
+                xterm)
+                    exec xterm -title "ApexFetch" -geometry 115x34 -e "$TARGET_CMD" --hold
+                    ;;
+            esac
+        fi
+    done
+
+    # Fallback to zenity dialog if no terminal emulator is found
+    if command -v zenity >/dev/null 2>&1; then
+        $BIN --no-color | zenity --text-info --title="ApexFetch" --width=800 --height=600 --font="Monospace 10" --ok-label="Chiudi"
+        exit 0
+    fi
+fi
+
+# Default fallback
+exec $BIN "$@"

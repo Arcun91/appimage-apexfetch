@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ApexFetch
+GenericName=System Information Fetcher
+Comment=High-Precision System & Hardware Identifier for Linux
+Exec=apexfetch --hold
+Icon=apexfetch
+Terminal=true
+Categories=System;Utility;ConsoleOnly;
+Keywords=system;fetch;hardware;neofetch;fastfetch;specs;
